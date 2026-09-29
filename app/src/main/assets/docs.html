@@ -1,0 +1,95 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Phone API documentation</title>
+<style>
+:root{color-scheme:light dark;--bg:#f8fafc;--text:#18242d;--muted:#52636f;--line:#dce4ea;--code:#eef2f5;--accent:#086873}
+@media(prefers-color-scheme:dark){:root{--bg:#101820;--text:#e6edf3;--muted:#a9bac8;--line:#2d3d4b;--code:#18252f;--accent:#85ddd1}}
+*{box-sizing:border-box}body{background:var(--bg);color:var(--text);font:16px/1.6 system-ui,sans-serif;max-width:850px;margin:0 auto;padding:32px 22px 60px}h1{font-size:30px;margin:0}h2{font-size:21px;margin-top:34px;padding-top:22px;border-top:1px solid var(--line)}h3{font-size:17px;margin-bottom:8px}a{color:var(--accent)}nav{margin:12px 0 28px}nav a{margin-right:18px}p{margin:10px 0}pre{background:var(--code);padding:16px;border-radius:6px;white-space:pre-wrap;overflow-wrap:anywhere;font:14px/1.6 ui-monospace,monospace}code{font-size:.9em;overflow-wrap:anywhere}dl{margin:0}dt{font-family:ui-monospace,monospace;margin-top:18px;font-weight:600}dd{margin:4px 0;color:var(--muted)}.note{color:var(--muted)}li{margin:7px 0}
+</style></head><body>
+<h1>Phone API</h1><p>Use SMS, contacts, calendar, notifications and device controls through your phone.</p>
+<nav><a href="/">Device stats</a><a href="/openapi.json">OpenAPI definition</a><a href="#routes">Routes</a><a href="#sms">Send an SMS</a></nav>
+<p class="note">This guide is public on the API listener. Device information and SMS routes require authentication. There are no third-party scripts or remote assets.</p>
+<h2>Authentication</h2>
+<p>For the browser login, use username <code>api</code> and your saved API key as the password. A random key is generated on first launch; copy it from Phone API. It stays saved across restarts and updates until you change it in Phone API.</p>
+<p>For API clients, send <code>Authorization: Bearer YOUR_KEY</code>. Saving a new key takes effect immediately.</p>
+<pre>export PHONE_API='http://your-phone:8765'
+export PHONE_API_KEY='your-saved-key'
+curl -H "Authorization: Bearer $PHONE_API_KEY" "$PHONE_API/health"</pre>
+<p>The hostname works when Tailscale MagicDNS is available. You can also copy the current Tailscale IP URL from the Android app.</p>
+<h2 id="routes">Routes</h2>
+<dl>
+<dt>GET /</dt><dd>Device stats in your browser. Uses the browser login above.</dd>
+<dt>GET /docs · GET /openapi.json</dt><dd>This guide and an OpenAPI 3.1 definition. No key required. Import the definition into an API client or Swagger viewer.</dd>
+<dt>GET /health · GET /stats · GET /device/status</dt><dd>JSON stats: device, battery, permissions, addresses, active listeners, SIMs and SMS request counts.</dd>
+<dt>GET /health/live</dt><dd>Returns status and service uptime when the listener is responding.</dd>
+<dt>GET /health/ready</dt><dd>Returns 200 when SMS permissions, active SIMs and the Tailscale listener are ready; otherwise 503 with setupNeeded.</dd>
+<dt>GET /sms/subscriptions</dt><dd>Active SIMs with subscriptionId, name, carrier, slot, embedded and defaultSms. Requires SIM permission.</dd>
+<dt>GET /sms/messages?limit=20&amp;after=0</dt><dd>Inbox messages, newest first. limit: 1–100. after: exclusive Unix timestamp in milliseconds. Each message includes id, from, text, receivedAt and subscriptionId. Requires SMS reading permission.</dd>
+<dt>POST /sms/send</dt><dd>Submit an SMS. Requires SMS sending permission, JSON and an Idempotency-Key. See below.</dd>
+<dt>GET /sms/requests/{id}</dt><dd>Check a submitted request: submitting, submitted, sent or failed. Also includes parts, sentParts, createdAt, errorCode and subscriptionId.</dd>
+</dl>
+<h2>Find a contact’s messages</h2>
+<p>Supply an E.164 number. The API normalises national-format numbers using the network/SIM country, then the device locale, then GB. Override this with <code>region=GB</code> if needed. Matching uses the full normalised number, not a suffix.</p>
+<pre>curl --get "$PHONE_API/sms/messages" \
+  -H "Authorization: Bearer $PHONE_API_KEY" \
+  --data-urlencode 'number=+447700900000' \
+  --data-urlencode 'region=GB' \
+  --data-urlencode 'limit=50'</pre>
+<p>With a number, the default <code>box=all</code> includes incoming and sent SMS. Without a number, it defaults to <code>box=inbox</code>. You can set <code>box=inbox</code>, <code>sent</code> or <code>all</code>. Results include <code>direction</code>, <code>address</code> and <code>numberE164</code>. Non-phone senders have a null normalised number. Encode <code>+</code> as <code>%2B</code> in direct URLs.</p>
+<p><code>after</code> and <code>before</code> are exclusive millisecond timestamps. This is a bounded view, with at most 100 messages per request; timestamp-only paging can skip messages that share a boundary timestamp. SMS stored by your SMS app is available; MMS and RCS are not.</p>
+<h2 id="sms">Send an SMS</h2>
+<p>First discover your SIM IDs. IDs can change if a SIM is replaced.</p>
+<pre>curl -H "Authorization: Bearer $PHONE_API_KEY" \
+  "$PHONE_API/sms/subscriptions"</pre>
+<p>Set <code>subscriptionId</code> to the SIM you want to use. If omitted, Android's default SMS SIM is used; if there is no default, the API returns 409.</p>
+<p>This example sends a real SMS when you supply a real recipient. Replace the example number and SIM ID before running it.</p>
+<pre>curl -X POST "$PHONE_API/sms/send" \
+  -H "Authorization: Bearer $PHONE_API_KEY" \
+  -H 'Content-Type: application/json' \
+  -H 'Idempotency-Key: my-message-000001' \
+  --data '{"to":"+447700900000","text":"Hello from my agent","subscriptionId":1}'</pre>
+<p><code>to</code> must be an international number beginning with <code>+</code>. <code>text</code> accepts 1–2,000 characters. Request bodies are limited to 8,192 bytes; send Content-Length rather than chunked encoding.</p>
+<p>The response is <code>202 Accepted</code> with an <code>id</code>. Check that request:</p>
+<pre>curl -H "Authorization: Bearer $PHONE_API_KEY" \
+  "$PHONE_API/sms/requests/REQUEST_ID"</pre>
+<p><code>sent</code> means Android reported every SMS part as sent. It does not confirm delivery to the recipient. Multipart messages may incur multiple SMS charges.</p>
+<h3>What is an idempotency key?</h3>
+<p>It labels one SMS send attempt. It is separate from your API key. If a request times out, repeat it with the same key and body: the phone returns the existing result without sending twice. Use a new key for each new message. A UUID is a convenient key.</p>
+<pre># Create once for this message; keep it for any retry.
+export SMS_REQUEST_KEY="$(uuidgen)"
+# Send it as: -H "Idempotency-Key: $SMS_REQUEST_KEY"</pre>
+<h3>Safe retries</h3>
+<p>Use a unique Idempotency-Key of 16–128 letters, digits, underscores or hyphens for each new message. Retry with the same key and exactly the same body to get the existing request without sending again. Reusing it for a different message returns 409. There are no automatic SMS retries.</p>
+<h2>Additional routes</h2>
+<dl>
+<dt>GET /capabilities</dt><dd>Permissions, notification connection, vibrator availability and default number region. Missing optional permissions do not stop the SMS API.</dd>
+<dt>GET /device/battery · GET /device/network</dt><dd>Charging state, temperature, voltage, battery saver, device idle state, network transports, metering and actual IP addresses. Battery status and health use Android BatteryManager integer values.</dd>
+<dt>GET /contacts?q=Alice&amp;limit=20</dt><dd>Contact phone entries, with id, name, number and numberE164. Multiple numbers produce multiple rows. Also accepts number and region. Requires contacts permission.</dd>
+<dt>GET /calendar/calendars</dt><dd>Calendars with IDs, names and account details. Requires calendar permission.</dd>
+<dt>GET /calendar/events?from=…&amp;to=…&amp;calendarId=…</dt><dd>Appointments, including recurring instances. from/to are Unix milliseconds; defaults to now through seven days. Maximum range: 31 days. Optional calendarId and limit (1–100, default 50).</dd>
+<dt>GET /location</dt><dd>Last known position. Check available and ageSeconds; cached positions can be old. Requires location access, plus Allow all the time when Phone API is not visible.</dd>
+<dt>GET /location?fresh=true&amp;timeoutSeconds=10</dt><dd>One location request, lasting at most 1–15 seconds. Android may return a recent fix. No fix gives available:false and location:null. There is no continuous tracking. Allow at least 20 seconds for the client timeout.</dd>
+<dt>GET /notifications?package=com.example.app&amp;limit=20</dt><dd>Current notifications, newest first, with package, key, title and text. Requires special notification access. Android can redact sensitive content; Phone API’s own notifications are excluded.</dd>
+<dt>POST /device/ring</dt><dd>JSON {"durationSeconds":5}, range 1–30. Requests the default ringtone; silent mode, volume and Do Not Disturb can affect audibility. DELETE /device/ring stops it.</dd>
+<dt>POST /device/vibrate</dt><dd>JSON {"durationMs":500}, range 1–5,000. Requires a device with a vibrator.</dd>
+</dl>
+<h2>Webhooks</h2>
+<p>Configure the destination on the phone under Webhooks. Delivery is off by default. Save a URL, optionally set a separate Bearer token, choose Incoming SMS and/or notification posts/removals, then enable delivery. Notifications are forwarded only for the package names you explicitly enter.</p>
+<p><code>GET /webhooks</code> shows configuration, queued/delivered/dropped counts and the last error. Tokens are never returned. <code>PUT /webhooks</code> accepts url, enabled, token, events and packages. Omit token to keep it for the same URL; an empty token clears it. Changing the URL clears the old token and queue. Disabling delivery also clears queued events. A request already in flight cannot be recalled.</p>
+<pre>{
+  "url": "http://your-agent:8080/phone-events",
+  "enabled": true,
+  "events": ["sms.received", "notification.posted", "notification.removed"],
+  "packages": ["com.example.app"]
+}</pre>
+<p>Use HTTPS for public destinations. HTTP is supported for private networks, including Tailscale. Redirects are not followed. <code>POST /webhooks/test</code> queues a synthetic test without an SMS. Its delivery status appears in <code>GET /webhooks</code>.</p>
+<pre>{"id":"event-uuid","type":"sms.received","createdAt":1234567890000,
+ "data":{"from":"+447700900000","numberE164":"+447700900000",
+         "text":"Hello","receivedAt":1234567890000,"subscriptionId":1}}</pre>
+<p>Incoming SMS is event-driven and needs Receive SMS permission. Notification data uses the same fields as /notifications. Every POST has <code>X-Phone-API-Event-ID</code> and <code>X-Phone-API-Event</code> headers. The receiver must acknowledge with a 2xx response and deduplicate by event id: delivery is at least once. Android schedules retries with backoff; delivery may wait during Doze or network loss. Keep receiver processing quick.</p>
+<p>Pending events persist across process restarts. The queue holds at most 500 events for seven days; expired or oldest overflow events are dropped and counted when the queue is processed. Stop API pauses capture/delivery. Restarting resumes pending events. There is no idle network polling.</p>
+<h2>Errors and background running</h2>
+<p>Errors have a JSON <code>error</code> field: 400 invalid input, 401 missing/wrong key, 403 missing phone permission, 404 unknown route or request, 405 wrong method, 409 conflicting request or missing default SIM, 411 missing Content-Length, 413 oversized body, 415 wrong content type and 503 not ready.</p>
+<p>Enable Run API in the Android app. It uses a foreground service with a quiet notification and recovers after process interruptions, app updates and reboot when Android permits. Stop API disables automatic recovery. Android force-stop requires reopening the app.</p>
+<p class="note">The service has no idle polling or wake lock. Android sleep behaviour and Tailscale availability can still affect reachability. This version does not provide voice notes or Android Auto controls.</p>
+</body></html>

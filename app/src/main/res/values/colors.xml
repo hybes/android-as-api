@@ -1,0 +1,9 @@
+<resources>
+    <color name="background">#F8FAFC</color>
+    <color name="text_primary">#18242D</color>
+    <color name="text_secondary">#52636F</color>
+    <color name="divider">#DCE4EA</color>
+    <color name="on_accent">#FFFFFF</color>
+    <color name="icon_background">#102A33</color>
+    <color name="button_background">#E2EBF1</color>
+</resources>
